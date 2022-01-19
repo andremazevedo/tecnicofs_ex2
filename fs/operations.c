@@ -7,6 +7,10 @@
 
 static pthread_mutex_t single_global_lock;
 
+tfs_state_t tfs_state = DISABLED;
+int open_file_count;
+pthread_cond_t cond_destroy;
+
 int tfs_init() {
     state_init();
 
@@ -19,12 +23,21 @@ int tfs_init() {
         return -1;
     }
 
+    tfs_state = ACTIVATED;
+    open_file_count = 0;
+    
+    if (pthread_cond_init(&cond_destroy, NULL) != 0)
+        return -1;
+
     return 0;
 }
 
 int tfs_destroy() {
     state_destroy();
     if (pthread_mutex_destroy(&single_global_lock) != 0) {
+        return -1;
+    }
+    if (pthread_cond_destroy(&cond_destroy) != 0) {
         return -1;
     }
     return 0;
@@ -36,6 +49,18 @@ static bool valid_pathname(char const *name) {
 
 int tfs_destroy_after_all_closed() {
     /* TO DO: implement this */
+    if (pthread_mutex_lock(&single_global_lock) != 0)
+        return -1;
+    
+    tfs_state = DISABLED;
+    while (!(open_file_count == 0)) {
+        pthread_cond_wait(&cond_destroy, &single_global_lock);
+    }
+
+    if (pthread_mutex_unlock(&single_global_lock) != 0)
+        return -1;
+
+    state_destroy();
     return 0;
 }
 
@@ -115,7 +140,16 @@ static int _tfs_open_unsynchronized(char const *name, int flags) {
 int tfs_open(char const *name, int flags) {
     if (pthread_mutex_lock(&single_global_lock) != 0)
         return -1;
+
+    if (tfs_state == DISABLED) {
+        pthread_mutex_unlock(&single_global_lock);
+        return -1;
+    }
+
     int ret = _tfs_open_unsynchronized(name, flags);
+    if (ret != -1)
+        open_file_count++;
+        
     if (pthread_mutex_unlock(&single_global_lock) != 0)
         return -1;
 
@@ -126,6 +160,10 @@ int tfs_close(int fhandle) {
     if (pthread_mutex_lock(&single_global_lock) != 0)
         return -1;
     int r = remove_from_open_file_table(fhandle);
+    if (r != -1) {
+        open_file_count--;
+        pthread_cond_signal(&cond_destroy);
+    }
     if (pthread_mutex_unlock(&single_global_lock) != 0)
         return -1;
 

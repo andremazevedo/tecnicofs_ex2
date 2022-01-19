@@ -6,6 +6,8 @@
 #include "state.h"
 #include <sys/types.h>
 
+typedef enum { DISABLED, ACTIVATED} tfs_state_t;
+
 /*
  * Initializes tecnicofs
  * Returns 0 if successful, -1 otherwise.
