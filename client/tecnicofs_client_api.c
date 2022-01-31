@@ -33,8 +33,6 @@ int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
     memset(request + 1, '\0', sizeof(char) * 40);
     memcpy(request + 1, client_pipe_path, sizeof(char) * strlen(client_pipe_path));
 
-    //printf("request on client: %s.\n", request);//to remove
-
     if (write (serverFd, request, sizeof(request)) == -1) {
         perror("Erro ao escrever no pipe");
         return -1;
@@ -49,8 +47,6 @@ int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
         perror("Erro na leitura");
         return -1;
     }
-
-    //printf("request on client: %d.\n", session_id);//to remove
 
     if (session_id < 0) 
         return -1;
@@ -112,8 +108,6 @@ int tfs_open(char const *name, int flags) {
         return -1;
     }
 
-    //printf("request on client(fd): %d.\n", fd);//to remove
-
     return fd;
 }
 
@@ -162,8 +156,6 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
         return -1;
     }
 
-    //printf("request on client(r): %lu.\n", r);//to remove
-
     return r;
 }
 
@@ -187,8 +179,6 @@ ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
         perror("Erro na leitura");
         return -1;
     }
-
-    //printf("request on client(r): %lu.\n", r);//to remove
 
     if (r == -1)
         return -1;

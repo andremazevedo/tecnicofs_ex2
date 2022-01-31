@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <signal.h>
+#include <errno.h>
 
 #define S (20)
 
@@ -27,6 +28,7 @@ typedef struct {
 
 typedef enum { AVAILABLE = 0, UNAVAILABLE = 1 } allocation_session_t;
 
+/* Session table */
 static session_t session_table[S];
 static char free_session[S];
 
@@ -48,12 +50,11 @@ session_t *session_get(int session_id) {
     return &session_table[session_id];
 }
 
-
 /*
  * Initializes Server
+ * Returns 0 if successful, -1 otherwise.
  */
-void server_init() {
-
+int server_init() {
     for (int i = 0; i < S; i++) {
         free_session[i] = AVAILABLE;
     }
@@ -61,21 +62,55 @@ void server_init() {
     for (int i = 0; i < S; i++) {
         session_table[i].s_id = i;
 
-        if (pthread_mutex_init(&session_table[i].s_mutex, NULL) != 0) {
-            perror("Erro no pthread_mutex_init");
-        }
+        if (pthread_mutex_init(&session_table[i].s_mutex, NULL) != 0) 
+            return -1;
 
-        if (pthread_cond_init(&session_table[i].s_cond, NULL) != 0) {
-            perror("Erro no pthread_cond_init");
-        }
+        if (pthread_cond_init(&session_table[i].s_cond, NULL) != 0)
+            return -1;
 
         session_table[i].s_buffer_count = 0;
     }
 
+    return 0;
 }
 
 
+// helper function to send messages
+// retries to send whatever was not sent in the begginning
+void send_msg(int fd, const void *buf, size_t nbyte) {
+    size_t written = 0;
 
+    while (written < nbyte) {
+        ssize_t ret = write(fd, buf + written, nbyte - written);
+        if (ret < 0) {
+            if (errno == EPIPE) {
+                /* TODO: Implement this */
+
+            }
+            fprintf(stderr, "[ERR]: write failed: %s\n", strerror(errno));//to remove
+            exit(EXIT_FAILURE);//to remove
+        }
+
+        written += (size_t)ret;
+    }
+}
+
+// helper function to receive messages
+// retries to receive whatever was not received in the begginning//to remove
+ssize_t receive_msg(int fd, void *buf, size_t count) {
+
+    ssize_t ret = read(fd, buf, count);
+    if (ret < 0) {
+        if (errno == EINTR) {
+            /* TODO: Implement this */
+
+        }
+        fprintf(stderr, "[ERR]: read failed: %s\n", strerror(errno));//to remove
+        exit(EXIT_FAILURE);//to remove
+    }
+
+    return (ssize_t)ret;
+}
 
 
 void *fnThread(void *arg) {
@@ -85,6 +120,7 @@ void *fnThread(void *arg) {
     for(;;) {
         if (pthread_mutex_lock(&session->s_mutex) != 0) {
             perror("Erro no lock");
+            //exit(-1);
         }
 
         printf("\nsession_id on thread: %d\n\n", session->s_id);//to remove
@@ -103,21 +139,13 @@ void *fnThread(void *arg) {
             printf("session_id on thread %d: %d.\n", session->s_id, session_id);//to remove
 
             if (!valid_session(session_id) || free_session[session_id] == AVAILABLE) {
-                int response = -1;
-                if (write(session->s_clientFd, &response, sizeof(int)) == -1) {
-                    pthread_mutex_unlock(&session->s_mutex);
-                    perror("Erro ao escrever no pipe");
-                    //exit(-1);
-                }
+                int ret = -1;
+                send_msg(session->s_clientFd, &ret, sizeof(int));
             }
 
-            int response = 0;
-            printf("response on thread %d: %d.\n", session->s_id, response);//to remove
-            if (write(session->s_clientFd, &response, sizeof(int)) == -1) {
-                pthread_mutex_unlock(&session->s_mutex);
-                perror("Erro ao escrever no pipe");
-                //exit(-1);
-            }
+            int ret = 0;
+            printf("response on thread %d: %d.\n", session->s_id, ret);//to remove
+            send_msg(session->s_clientFd, &ret, sizeof(int));
 
             close(session->s_clientFd);
             free_session[session->s_id] = AVAILABLE;
@@ -136,11 +164,8 @@ void *fnThread(void *arg) {
             int fd;
             fd = tfs_open(path, flags);
             printf("fd on thread %d: %d.\n", session->s_id, fd);//to remove
-            if (write(session->s_clientFd, &fd, sizeof(int)) == -1) {
-                pthread_mutex_unlock(&session->s_mutex);
-                perror("Erro ao escrever no pipe");
-                //exit(-1);
-            }
+
+            send_msg(session->s_clientFd, &fd, sizeof(int));
         }
 
         if (tfs_op_code == TFS_OP_CODE_CLOSE) {
@@ -150,14 +175,11 @@ void *fnThread(void *arg) {
             memcpy(&fd, session->s_buffer + 5, sizeof(int));
             printf("fd on thread %d: %d.\n", session->s_id, fd);//to remove
 
-            int response;
-            response = tfs_close(fd);
-            printf("close on thread %d: %d.\n", session->s_id, response);//to remove
-            if (write(session->s_clientFd, &response, sizeof(int)) == -1) {
-                pthread_mutex_unlock(&session->s_mutex);
-                perror("Erro ao escrever no pipe");
-                //exit(-1);
-            }
+            int ret;
+            ret = tfs_close(fd);
+            printf("close on thread %d: %d.\n", session->s_id, ret);//to remove
+            
+            send_msg(session->s_clientFd, &ret, sizeof(int));
         }
 
         if (tfs_op_code == TFS_OP_CODE_WRITE) {
@@ -177,11 +199,8 @@ void *fnThread(void *arg) {
             ssize_t r;
             r = tfs_write(fhandle, buffer, len);
             printf("r on thread %d: %lu.\n", session->s_id, r);//to remove
-            if (write(session->s_clientFd, &r, sizeof(ssize_t)) == -1) {
-                pthread_mutex_unlock(&session->s_mutex);
-                perror("Erro ao escrever no pipe");
-                //exit(-1);
-            }
+
+            send_msg(session->s_clientFd, &r, sizeof(ssize_t));
         }
 
         if (tfs_op_code == TFS_OP_CODE_READ) {
@@ -199,16 +218,11 @@ void *fnThread(void *arg) {
             r = tfs_read(fhandle, buffer, len);
             printf("r on thread %d: %lu.\n", session->s_id, r);//to remove
             printf("buffer on thread %d: %s.\n", session->s_id, buffer);//to remove
-            if (write(session->s_clientFd, &r, sizeof(ssize_t)) == -1) {
-                perror("Erro ao escrever no pipe");
-                //exit(-1);//unlock
-            }
+
+            send_msg(session->s_clientFd, &r, sizeof(ssize_t));
+
             if (r != -1) {
-                if (write(session->s_clientFd, buffer, sizeof(char) * (size_t)r) == -1) {
-                    pthread_mutex_unlock(&session->s_mutex);
-                    perror("Erro ao escrever no pipe");
-                    //exit(-1);
-                }
+                send_msg(session->s_clientFd, buffer, sizeof(char) * (size_t)r);
             }
         }
 
@@ -266,10 +280,7 @@ int main(int argc, char **argv) {
     int session_id;
     for(;;) {
 
-        if ((r = read(serverFd, &tfs_op_code, sizeof(tfs_op_code))) == -1) {
-            perror("Erro na leitura");
-            return -1;
-        }
+        r = receive_msg(serverFd, &tfs_op_code, sizeof(tfs_op_code));
 
         if (r == 0) {
             printf("client disconnected\n");//to remove
@@ -283,10 +294,7 @@ int main(int argc, char **argv) {
             printf("TFS_MOUNT on server\n");//to remove
             int clientFd;
             char client_pipe_path[40];
-            if (read(serverFd, client_pipe_path, sizeof(client_pipe_path)) == -1) {
-                perror("Erro na leitura");
-                return -1;
-            }
+            receive_msg(serverFd, client_pipe_path, sizeof(client_pipe_path));
             printf("client_pipe_path on server: %s.\n", client_pipe_path);//to remove
 
             if ((clientFd = open(client_pipe_path, O_WRONLY)) == -1) {
@@ -315,19 +323,11 @@ int main(int argc, char **argv) {
                 }
             }
             printf("session_id on server: %d.\n", session_id);//to remove
-            if (write (clientFd, &session_id, sizeof(int)) == -1) {
-                perror("Erro ao escrever no pipe");
-                return -1;
-            }
+            send_msg(clientFd, &session_id, sizeof(int));
             continue;
-            //se nao houver sessoes disponiveis???????????????????
-            //nao e necessario mutexes??????????
         } 
-            
-        if (read(serverFd, &session_id, sizeof(int)) == -1) {
-            perror("Erro na leitura");
-            return -1;
-        }
+
+        receive_msg(serverFd, &session_id, sizeof(int));
         
         session_t *session = session_get(session_id);
         if (session == NULL) {
@@ -348,69 +348,47 @@ int main(int argc, char **argv) {
         
         if (tfs_op_code == TFS_OP_CODE_OPEN) {
             printf("TFS_OPEN on server\n");//to remove
-
-            if (read(serverFd, session->s_buffer + 5, sizeof(char) * 44) == -1) {
-                perror("Erro na leitura");//unlock
-                return -1;
-            }
+            receive_msg(serverFd, session->s_buffer + 5, sizeof(char) * 44);
         }
 
         if (tfs_op_code == TFS_OP_CODE_CLOSE) {
-            printf("TFS_CLOSE on server\n");
-
-            if (read(serverFd, session->s_buffer + 5, sizeof(char) * 4) == -1) {
-                perror("Erro na leitura");//unlock
-                return -1;
-            }
+            printf("TFS_CLOSE on server\n");//to remove
+            receive_msg(serverFd, session->s_buffer + 5, sizeof(char) * 4);
         }
 
         if (tfs_op_code == TFS_OP_CODE_WRITE) {
             printf("TFS_WRITE on server\n");//to remove
             size_t len;
 
-            if (read(serverFd, session->s_buffer + 5, sizeof(int)) == -1) {
-                perror("Erro na leitura");//unlock
-                return -1;
-            }
-
-            if (read(serverFd, &len, sizeof(size_t)) == -1) {
-                perror("Erro na leitura");
-                return -1;
-            }
+            receive_msg(serverFd, session->s_buffer + 5, sizeof(int));
+            receive_msg(serverFd, &len, sizeof(size_t));
 
             memcpy(session->s_buffer + 9, &len, sizeof(size_t));
-            if (read(serverFd, session->s_buffer + 17, sizeof(char) * len) == -1) {
-                perror("Erro na leitura");//unlock
-                return -1;
-            }
+            receive_msg(serverFd, session->s_buffer + 17, sizeof(char) * len);
         }
 
         if (tfs_op_code == TFS_OP_CODE_READ) {
             printf("TFS_READ on server\n");//to remove
-
-            if (read(serverFd, session->s_buffer + 5, sizeof(char) * 12) == -1) {
-                perror("Erro na leitura");//unlock
-                return -1;
-            }
+            receive_msg(serverFd, session->s_buffer + 5, sizeof(char) * 12);
         }
 
         if (tfs_op_code == TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED) {
             printf("TFS_SHUTDOWN_AFTER_ALL_CLOSED on server\n");//to remove
-            int response;
-            response = tfs_destroy_after_all_closed();
-            printf("response on server: %d.\n", response);//to remove
-            if (write(session->s_clientFd, &response, sizeof(int)) == -1) {
-                pthread_mutex_unlock(&session->s_mutex);
-                perror("Erro ao escrever no pipe");
-            }
-            if (response != -1) {
+            int ret;
+            ret = tfs_destroy_after_all_closed();
+            printf("response on server: %d.\n", ret);//to remove
+
+            send_msg(session->s_clientFd, &ret, sizeof(int));
+
+            if (ret != -1) {
                 break;
             }
         }
         
         session->s_buffer_count++;
         if (pthread_cond_signal(&session->s_cond) != 0) {
-            perror("Erro no signal");//unlock
+            pthread_mutex_unlock(&session->s_mutex);
+            perror("Erro no signal");
             return -1;
         }
 
@@ -426,6 +404,8 @@ int main(int argc, char **argv) {
         perror("Erro no unlink");
         return -1;
     }
-    printf("Server ended sucessfully!!!!");
+
+    printf("Server ended sucessfully!!!!");//to remove
+
     return 0;
 }
