@@ -14,14 +14,14 @@ INCLUDES = $(addprefix -I, $(INCLUDE_DIRS))
 SOURCES  := $(wildcard */*.c)
 HEADERS  := $(wildcard */*.h)
 OBJECTS  := $(SOURCES:.c=.o)
-TARGET_EXECS := fs/tfs_server tests/lib_destroy_after_all_closed_test tests/client_server_simple_test
+TARGET_EXECS := fs/tfs_server tests/lib_destroy_after_all_closed_test tests/client_server_simple_test tests/client_server_simple_test1 tests/client_server_simple_test2 tests/client1 tests/client2 tests/client3 tests/client4 tests/client5 tests/client6
 
 # VPATH is a variable used by Makefile which finds *sources* and makes them available throughout the codebase
 # vpath %.h <DIR> tells make to look for header files in <DIR>
 vpath # clears VPATH
 vpath %.h $(INCLUDE_DIRS)
 
-CFLAGS = -std=c11 -D_POSIX_C_SOURCE=200809L
+CFLAGS = -std=c11 -D_POSIX_C_SOURCE=200809L -fsanitize=thread
 CFLAGS += $(INCLUDES)
 
 # Warnings
@@ -41,7 +41,7 @@ else
   CFLAGS += -O3
 endif
 
-LDFLAGS = -pthread
+LDFLAGS = -pthread -fsanitize=thread
 
 # A phony target is one that is not really the name of a file
 # https://www.gnu.org/software/make/manual/html_node/Phony-Targets.html
@@ -69,6 +69,15 @@ fmt: $(SOURCES) $(HEADERS)
 tests/client_server_simple_test: tests/client_server_simple_test.o client/tecnicofs_client_api.o
 fs/tfs_server: fs/operations.o fs/state.o
 tests/lib_destroy_after_all_closed_test: fs/operations.o fs/state.o
+tests/client_server_simple_test1: tests/client_server_simple_test1.o client/tecnicofs_client_api.o
+tests/client_server_simple_test2: tests/client_server_simple_test2.o client/tecnicofs_client_api.o
+tests/client1: tests/client1.o client/tecnicofs_client_api.o
+tests/client2: tests/client2.o client/tecnicofs_client_api.o
+tests/client3: tests/client3.o client/tecnicofs_client_api.o
+tests/client4: tests/client4.o client/tecnicofs_client_api.o
+tests/client5: tests/client5.o client/tecnicofs_client_api.o
+tests/client6: tests/client6.o client/tecnicofs_client_api.o
+
 
 clean:
 	rm -f $(OBJECTS) $(TARGET_EXECS)

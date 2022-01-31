@@ -10,6 +10,7 @@
 
 int session_id;
 int serverFd, clientFd;
+char client_pipe_name[40];
 
 int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
     /* TODO: Implement this */
@@ -32,7 +33,7 @@ int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
     memset(request + 1, '\0', sizeof(char) * 40);
     memcpy(request + 1, client_pipe_path, sizeof(char) * strlen(client_pipe_path));
 
-    printf("request on client: %s.\n", request);//to remove
+    //printf("request on client: %s.\n", request);//to remove
 
     if (write (serverFd, request, sizeof(request)) == -1) {
         perror("Erro ao escrever no pipe");
@@ -49,18 +50,22 @@ int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
         return -1;
     }
 
-    printf("request on client: %d.\n", session_id);//to remove
+    //printf("request on client: %d.\n", session_id);//to remove
 
-    if (session_id != -1) 
-        return 0;
+    if (session_id < 0) 
+        return -1;
 
-    return -1;
+    memset(client_pipe_name, '\0', sizeof(char) * 40);
+    memcpy(client_pipe_name, client_pipe_path, sizeof(char) * strlen(client_pipe_path));
+
+    return 0;
 }
 
 int tfs_unmount() {
     /* TODO: Implement this */
     char tfs_op_code = TFS_OP_CODE_UNMOUNT;
     char request[5];
+    int response;
 
     memcpy(request, &tfs_op_code, sizeof(char));
     memcpy(request + 1, &session_id, sizeof(int));
@@ -70,15 +75,19 @@ int tfs_unmount() {
         return -1;
     }
 
-    // if (read(clientFd, &re, sizeof(int)) == -1) {
-    //     perror("Erro na leitura");
-    //     return -1;
-    // }
+    if (read(clientFd, &response, sizeof(int)) == -1) {
+        perror("Erro na leitura");
+        return -1;
+    }
 
     close(clientFd);
     close(serverFd);
 
-    return 0;
+    if(unlink(client_pipe_name) != 0) {
+        return -1;
+    }
+
+    return response;
 }
 
 int tfs_open(char const *name, int flags) {
@@ -103,7 +112,7 @@ int tfs_open(char const *name, int flags) {
         return -1;
     }
 
-    printf("request on client(fd): %d.\n", fd);//to remove
+    //printf("request on client(fd): %d.\n", fd);//to remove
 
     return fd;
 }
@@ -153,7 +162,7 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
         return -1;
     }
 
-    printf("request on client(r): %lu.\n", r);//to remove
+    //printf("request on client(r): %lu.\n", r);//to remove
 
     return r;
 }
@@ -179,7 +188,7 @@ ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
         return -1;
     }
 
-    printf("request on client(r): %lu.\n", r);//to remove
+    //printf("request on client(r): %lu.\n", r);//to remove
 
     if (r == -1)
         return -1;
