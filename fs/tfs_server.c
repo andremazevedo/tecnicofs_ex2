@@ -77,18 +77,32 @@ int server_init() {
 
 // helper function to send messages
 // retries to send whatever was not sent in the begginning
-void send_msg(int fd, const void *buf, size_t nbyte) {
+void send_msg(int fd, const void *buf, size_t nbyte, int session_id) {
     size_t written = 0;
 
     while (written < nbyte) {
         ssize_t ret = write(fd, buf + written, nbyte - written);
-        if (ret < 0) {
+        if (ret == -1) {
             if (errno == EPIPE) {
-                /* TODO: Implement this */
-
+                /* clean session data */
+                printf("cleaning session id:%d\n", session_id);
+                session_t *session = session_get(session_id);
+                if (session == NULL) {
+                    exit(EXIT_FAILURE);
+                }
+                // set session as available
+                free_session[session_id] = AVAILABLE;
+                // clear session buffer data
+                memset(session->s_buffer, 0, BLOCK_SIZE);
+                session->s_buffer_count = 0;
+                // set clientFd as -1
+                session->s_clientFd = -1;
+            }else if(errno != EINTR ){
+                // if error is diferent from epipe and eintr 
+                fprintf(stderr, "[ERR]: write failed: %s\n", strerror(errno));//to remove
+                exit(EXIT_FAILURE);//to remove
             }
-            fprintf(stderr, "[ERR]: write failed: %s\n", strerror(errno));//to remove
-            exit(EXIT_FAILURE);//to remove
+            
         }
 
         written += (size_t)ret;
@@ -98,18 +112,53 @@ void send_msg(int fd, const void *buf, size_t nbyte) {
 // helper function to receive messages
 // retries to receive whatever was not received in the begginning//to remove
 ssize_t receive_msg(int fd, void *buf, size_t count) {
+    ssize_t ret = -1;
+    size_t readBytes = 0;
 
-    ssize_t ret = read(fd, buf, count);
-    if (ret < 0) {
-        if (errno == EINTR) {
-            /* TODO: Implement this */
-
+    while(readBytes != count){
+        ret = read(fd, buf, count);
+        printf("reading with ret %lu\n", ret);
+        if (ret == -1) {
+            if (errno != EINTR) {
+                fprintf(stderr, "[ERR]: read failed: %s\n", strerror(errno));//to remove
+                exit(EXIT_FAILURE);//to remove
+            }
+        }else if (ret == 0){
+            break;
         }
-        fprintf(stderr, "[ERR]: read failed: %s\n", strerror(errno));//to remove
-        exit(EXIT_FAILURE);//to remove
+        readBytes += (size_t)ret;
+    }
+    
+    return (ssize_t)ret;
+}
+
+int open_pipe(const char *pipename, int flags){
+    int fd = -1;
+
+    while(fd < 0){
+        fd = open(pipename, flags);
+        if( (fd == -1) && (errno != EINTR)){
+            perror("Erro ao abrir o pipe");
+            return -1;
+        }
+
+    }
+    printf("returned fd is %d\n", fd);
+
+    return fd;
+}
+
+void close_pipe(int fd){
+    int ret = -1;
+
+    while(ret != 0){
+        ret = close(fd);
+        if( (ret == -1) && (errno != EINTR)){
+            perror("Erro ao fechar o pipe");
+            exit(EXIT_FAILURE);//to remove
+        }
     }
 
-    return (ssize_t)ret;
 }
 
 
@@ -140,12 +189,12 @@ void *fnThread(void *arg) {
 
             if (!valid_session(session_id) || free_session[session_id] == AVAILABLE) {
                 int ret = -1;
-                send_msg(session->s_clientFd, &ret, sizeof(int));
+                send_msg(session->s_clientFd, &ret, sizeof(int), session->s_id);
             }
 
             int ret = 0;
             printf("response on thread %d: %d.\n", session->s_id, ret);//to remove
-            send_msg(session->s_clientFd, &ret, sizeof(int));
+            send_msg(session->s_clientFd, &ret, sizeof(int), session->s_id);
 
             close(session->s_clientFd);
             free_session[session->s_id] = AVAILABLE;
@@ -165,7 +214,7 @@ void *fnThread(void *arg) {
             fd = tfs_open(path, flags);
             printf("fd on thread %d: %d.\n", session->s_id, fd);//to remove
 
-            send_msg(session->s_clientFd, &fd, sizeof(int));
+            send_msg(session->s_clientFd, &fd, sizeof(int), session->s_id);
         }
 
         if (tfs_op_code == TFS_OP_CODE_CLOSE) {
@@ -179,7 +228,7 @@ void *fnThread(void *arg) {
             ret = tfs_close(fd);
             printf("close on thread %d: %d.\n", session->s_id, ret);//to remove
             
-            send_msg(session->s_clientFd, &ret, sizeof(int));
+            send_msg(session->s_clientFd, &ret, sizeof(int), session->s_id);
         }
 
         if (tfs_op_code == TFS_OP_CODE_WRITE) {
@@ -200,7 +249,7 @@ void *fnThread(void *arg) {
             r = tfs_write(fhandle, buffer, len);
             printf("r on thread %d: %lu.\n", session->s_id, r);//to remove
 
-            send_msg(session->s_clientFd, &r, sizeof(ssize_t));
+            send_msg(session->s_clientFd, &r, sizeof(ssize_t), session->s_id);
         }
 
         if (tfs_op_code == TFS_OP_CODE_READ) {
@@ -219,10 +268,10 @@ void *fnThread(void *arg) {
             printf("r on thread %d: %lu.\n", session->s_id, r);//to remove
             printf("buffer on thread %d: %s.\n", session->s_id, buffer);//to remove
 
-            send_msg(session->s_clientFd, &r, sizeof(ssize_t));
+            send_msg(session->s_clientFd, &r, sizeof(ssize_t), session->s_id);
 
             if (r != -1) {
-                send_msg(session->s_clientFd, buffer, sizeof(char) * (size_t)r);
+                send_msg(session->s_clientFd, buffer, sizeof(char) * (size_t)r, session->s_id);
             }
         }
 
@@ -236,12 +285,11 @@ void *fnThread(void *arg) {
 }
 
 
-
-
 int main(int argc, char **argv) {
 
-    int serverFd;
+    int serverFd = -1;
     pthread_t tid[S];
+    signal(SIGPIPE, SIG_IGN);
 
     if (argc < 2) {
         printf("Please specify the pathname of the server's pipe.\n");
@@ -268,23 +316,18 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    if ((serverFd = open(pipename, O_RDONLY)) == -1) {
-        perror("Erro ao abrir o pipe");
-        return -1;
-    }
-
-    signal(SIGPIPE, SIG_IGN);
+    serverFd = open_pipe(pipename, O_RDONLY);
     
     ssize_t r;
     char tfs_op_code;
     int session_id;
     for(;;) {
-
+        printf("looping with serverFd : %d\n", serverFd);
         r = receive_msg(serverFd, &tfs_op_code, sizeof(tfs_op_code));
 
         if (r == 0) {
             printf("client disconnected\n");//to remove
-            serverFd = open(pipename, O_RDONLY);
+            serverFd = open_pipe(pipename, O_RDONLY);
             continue;
         }
 
@@ -292,16 +335,13 @@ int main(int argc, char **argv) {
 
         if (tfs_op_code == TFS_OP_CODE_MOUNT) {
             printf("TFS_MOUNT on server\n");//to remove
-            int clientFd;
+            int clientFd = -1;
             char client_pipe_path[40];
             receive_msg(serverFd, client_pipe_path, sizeof(client_pipe_path));
             printf("client_pipe_path on server: %s.\n", client_pipe_path);//to remove
 
-            if ((clientFd = open(client_pipe_path, O_WRONLY)) == -1) {
-                perror("Erro ao abrir o pipe");
-                return -1;
-            }
-            
+            clientFd = open_pipe(client_pipe_path, O_WRONLY);
+
             session_id = -1;
             for (int id = 0; id < S; id++) { 
                 if (free_session[id] == AVAILABLE) {
@@ -323,7 +363,7 @@ int main(int argc, char **argv) {
                 }
             }
             printf("session_id on server: %d.\n", session_id);//to remove
-            send_msg(clientFd, &session_id, sizeof(int));
+            send_msg(clientFd, &session_id, sizeof(int), session_id);
             continue;
         } 
 
@@ -378,7 +418,7 @@ int main(int argc, char **argv) {
             ret = tfs_destroy_after_all_closed();
             printf("response on server: %d.\n", ret);//to remove
 
-            send_msg(session->s_clientFd, &ret, sizeof(int));
+            send_msg(session->s_clientFd, &ret, sizeof(int), session->s_id);
 
             if (ret != -1) {
                 break;
@@ -399,7 +439,7 @@ int main(int argc, char **argv) {
 
     }
 
-    close(serverFd);
+    close_pipe(serverFd);
     if (unlink(pipename) != 0) {
         perror("Erro no unlink");
         return -1;
