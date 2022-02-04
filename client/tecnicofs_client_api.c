@@ -7,13 +7,80 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
 
 int session_id;
 int serverFd, clientFd;
 char client_pipe_name[40];
 
+//DOUBT????????????????????//comment on atomicamente
+ssize_t send_msg(int fd, const void *buf, size_t count) {
+    size_t written = 0;
+
+    while (written < count) {
+        ssize_t ret = write(fd, buf + written, count - written);
+        if ((ret == -1) && (errno != EINTR)) {
+            fprintf(stderr, "[ERR]: write failed: %s\n", strerror(errno));//to remove
+            return -1;
+        } else if (ret != count) {
+            fprintf(stderr, "[ERR]: write to server failed(not atomic)\n");//to remove 
+            return -1;
+        }
+
+        written += (size_t)ret;
+    }
+
+    return (ssize_t)written;
+}
+
+// What to do on functions if read returns 0(return 0 or -1 eg)???
+ssize_t receive_msg(int fd, void *buf, size_t count) {
+    size_t readBytes = 0;
+
+    while (readBytes < count) {
+        ssize_t ret = read(fd, buf + readBytes, count - readBytes);
+        if ((ret == -1) && (errno != EINTR)) {
+            fprintf(stderr, "[ERR]: read failed: %s\n", strerror(errno));//to remove
+            return -1;
+        } else if (ret == 0) {
+            return -1;
+        }
+
+        readBytes += (size_t)ret;
+    }
+
+    return (ssize_t)readBytes;
+}
+
+int open_pipe(const char *pipename, int flags) {
+    int fd = -1;
+
+    while (fd < 0) {
+        fd = open(pipename, flags);
+        if ((fd == -1) && (errno != EINTR)) {
+            fprintf(stderr, "[ERR]: open failed: %s\n", strerror(errno));//to remove
+            return -1;
+        }
+    }
+
+    return fd;
+}
+
+int close_pipe(int fd) {
+    int ret = -1;
+
+    while (ret < 0) {
+        ret = close(fd);
+        if ((ret == -1) && (errno != EINTR)) {
+            fprintf(stderr, "[ERR]: close failed: %s\n", strerror(errno));//to remove
+            return -1;
+        }
+    }
+
+    return ret;
+}
+
 int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
-    /* TODO: Implement this */
     char tfs_op_code = TFS_OP_CODE_MOUNT;
     char request[41];
 
@@ -24,7 +91,7 @@ int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
         return -1;
     }
 
-    if ((serverFd = open(server_pipe_path, O_WRONLY)) == -1) {
+    if ((serverFd = open_pipe(server_pipe_path, O_WRONLY)) == -1) {
         perror("Erro ao abrir o pipe");
         return -1;
     }
@@ -33,17 +100,17 @@ int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
     memset(request + 1, '\0', sizeof(char) * 40);
     memcpy(request + 1, client_pipe_path, sizeof(char) * strlen(client_pipe_path));
 
-    if (write (serverFd, request, sizeof(request)) == -1) {
+    if (send_msg(serverFd, request, sizeof(request)) == -1) {
         perror("Erro ao escrever no pipe");
         return -1;
     }
 
-    if ((clientFd = open(client_pipe_path, O_RDONLY)) == -1) {
+    if ((clientFd = open_pipe(client_pipe_path, O_RDONLY)) == -1) {
         perror("Erro ao abrir o pipe");
         return -1;
     }
 
-    if (read(clientFd, &session_id, sizeof(int)) == -1) {
+    if (receive_msg(clientFd, &session_id, sizeof(int)) == -1) {
         perror("Erro na leitura");
         return -1;
     }
@@ -58,7 +125,6 @@ int tfs_mount(char const *client_pipe_path, char const *server_pipe_path) {
 }
 
 int tfs_unmount() {
-    /* TODO: Implement this */
     char tfs_op_code = TFS_OP_CODE_UNMOUNT;
     char request[5];
     int response;
@@ -66,18 +132,25 @@ int tfs_unmount() {
     memcpy(request, &tfs_op_code, sizeof(char));
     memcpy(request + 1, &session_id, sizeof(int));
 
-    if (write (serverFd, request, sizeof(request)) == -1) {
+    if (send_msg(serverFd, request, sizeof(request)) == -1) {
         perror("Erro ao escrever no pipe");
         return -1;
     }
 
-    if (read(clientFd, &response, sizeof(int)) == -1) {
+    if (receive_msg(clientFd, &response, sizeof(int)) == -1) {
         perror("Erro na leitura");
         return -1;
     }
 
-    close(clientFd);
-    close(serverFd);
+    if (close_pipe(clientFd) == -1) {
+        perror("Erro ao fechar o pipe");
+        return -1;
+    }
+
+    if (close_pipe(serverFd) == -1) {
+        perror("Erro ao fechar o pipe");
+        return -1;
+    }
 
     if(unlink(client_pipe_name) != 0) {
         return -1;
@@ -87,7 +160,6 @@ int tfs_unmount() {
 }
 
 int tfs_open(char const *name, int flags) {
-    /* TODO: Implement this */
     char tfs_op_code = TFS_OP_CODE_OPEN;
     char request[49];
     int fd;
@@ -98,12 +170,12 @@ int tfs_open(char const *name, int flags) {
     memcpy(request +  5, name, sizeof(char) * strlen(name));
     memcpy(request + 45, &flags, sizeof(int));
 
-    if (write (serverFd, request, sizeof(request)) == -1) {
+    if (send_msg(serverFd, request, sizeof(request)) == -1) {
         perror("Erro ao escrever no pipe");
         return -1;
     }
 
-    if (read(clientFd, &fd, sizeof(int)) == -1) {
+    if (receive_msg(clientFd, &fd, sizeof(int)) == -1) {
         perror("Erro na leitura");
         return -1;
     }
@@ -112,7 +184,6 @@ int tfs_open(char const *name, int flags) {
 }
 
 int tfs_close(int fhandle) {
-    /* TODO: Implement this */
     char tfs_op_code = TFS_OP_CODE_CLOSE;
     char request[9];
     int response;
@@ -121,12 +192,12 @@ int tfs_close(int fhandle) {
     memcpy(request + 1, &session_id, sizeof(int));
     memcpy(request + 5, &fhandle, sizeof(int));
 
-    if (write (serverFd, request, sizeof(request)) == -1) {
+    if (send_msg(serverFd, request, sizeof(request)) == -1) {
         perror("Erro ao escrever no pipe");
         return -1;
     }
 
-    if (read(clientFd, &response, sizeof(int)) == -1) {
+    if (receive_msg(clientFd, &response, sizeof(int)) == -1) {
         perror("Erro na leitura");
         return -1;
     }
@@ -135,7 +206,6 @@ int tfs_close(int fhandle) {
 }
 
 ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
-    /* TODO: Implement this */
     char tfs_op_code = TFS_OP_CODE_WRITE;
     char request[17 + len];
     ssize_t r;
@@ -146,12 +216,12 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
     memcpy(request +  9, &len, sizeof(size_t));
     memcpy(request + 17, buffer, sizeof(char) * len);
 
-    if (write (serverFd, request, sizeof(request)) == -1) {
+    if (send_msg(serverFd, request, sizeof(request)) == -1) {
         perror("Erro ao escrever no pipe");
         return -1;
     }
 
-    if (read(clientFd, &r, sizeof(ssize_t)) == -1) {
+    if (receive_msg(clientFd, &r, sizeof(ssize_t)) == -1) {
         perror("Erro na leitura");
         return -1;
     }
@@ -160,7 +230,6 @@ ssize_t tfs_write(int fhandle, void const *buffer, size_t len) {
 }
 
 ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
-    /* TODO: Implement this */
     char tfs_op_code = TFS_OP_CODE_READ;
     char request[17];
     ssize_t r;
@@ -170,20 +239,21 @@ ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
     memcpy(request + 5, &fhandle, sizeof(int));
     memcpy(request + 9, &len, sizeof(size_t));
 
-    if (write (serverFd, request, sizeof(request)) == -1) {
+    if (send_msg(serverFd, request, sizeof(request)) == -1) {
         perror("Erro ao escrever no pipe");
         return -1;
     }
 
-    if (read(clientFd, &r, sizeof(ssize_t)) == -1) {
+    if (receive_msg(clientFd, &r, sizeof(ssize_t)) == -1) {
         perror("Erro na leitura");
         return -1;
     }
 
-    if (r == -1)
+    if (r == -1) {
         return -1;
+    }
 
-    if (read(clientFd, buffer, sizeof(char) * (size_t)r) == -1) {
+    if (receive_msg(clientFd, buffer, sizeof(char) * (size_t)r) == -1) {
         perror("Erro na leitura");
         return -1;
     }
@@ -192,7 +262,6 @@ ssize_t tfs_read(int fhandle, void *buffer, size_t len) {
 }
 
 int tfs_shutdown_after_all_closed() {
-    /* TODO: Implement this */
     char tfs_op_code = TFS_OP_CODE_SHUTDOWN_AFTER_ALL_CLOSED;
     char request[5];
     int response;
@@ -200,12 +269,12 @@ int tfs_shutdown_after_all_closed() {
     memcpy(request, &tfs_op_code, sizeof(char));
     memcpy(request + 1, &session_id, sizeof(int));
 
-    if (write (serverFd, request, sizeof(request)) == -1) {
+    if (send_msg(serverFd, request, sizeof(request)) == -1) {
         perror("Erro ao escrever no pipe");
         return -1;
     }
     
-    if (read(clientFd, &response, sizeof(int)) == -1) {
+    if (receive_msg(clientFd, &response, sizeof(int)) == -1) {
         perror("Erro na leitura");
         return -1;
     }

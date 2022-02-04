@@ -1,3 +1,6 @@
+# General
+.DS_Store
+
 # Executables
 tests/test1
 
