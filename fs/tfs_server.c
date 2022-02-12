@@ -502,14 +502,12 @@ int main(int argc, char **argv) {
             ret = tfs_destroy_after_all_closed();
 
             if (send_msg(session->s_clientFd, &ret, sizeof(int), session) == -1) {
-                exit(-1);
+                return -1;
             }
 
             if (ret != -1) {
                 break;
             }
-
-            continue;
         }
         
         session->s_buffer_count++;
